@@ -116,7 +116,7 @@ if submit and question.strip():
         st.stop()
 
     st.markdown("### Answer")
-    st.info(answer_text)
+    st.markdown(answer_text)
 
     if sources:
         st.markdown("### Sources")
