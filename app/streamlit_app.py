@@ -32,6 +32,28 @@ def _is_comparison_query(q: str) -> bool:
     return mentions_both or compare_keywords
 
 
+def _render_answer_block(entry: dict, expanded: bool = True) -> None:
+    """Render a single Q&A history entry."""
+    st.markdown(f"**Q: {entry['question']}**")
+    if entry.get("mode_label"):
+        st.caption(entry["mode_label"])
+    st.markdown(entry["answer"])
+    if entry["sources"]:
+        with st.expander(f"Sources ({len(entry['sources'])})"):
+            for i, src in enumerate(entry["sources"], 1):
+                st.markdown(
+                    f"**{i}. {src['company']} {src['year']}** — `{src['source_file']}`"
+                )
+                st.text(src["excerpt"])
+                if i < len(entry["sources"]):
+                    st.markdown("---")
+
+
+# ── Session state ─────────────────────────────────────────────────────────────
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📊 Filters")
@@ -86,6 +108,12 @@ with st.sidebar:
         if st.button(ex, key=f"ex_{ex}", use_container_width=True):
             st.session_state["question_input"] = ex
 
+    st.markdown("---")
+    if st.session_state.history:
+        if st.button("Clear history", use_container_width=True):
+            st.session_state.history = []
+            st.rerun()
+
 
 # ── Main Area ─────────────────────────────────────────────────────────────────
 st.title("Financial Reports Q&A")
@@ -115,9 +143,11 @@ if submit and question.strip():
 
     # Auto-upgrade to Compare mode when query is clearly about multiple companies
     effective_mode = mode
+    mode_label = None
     if mode == "Single Query" and _is_comparison_query(question):
         effective_mode = "Compare Companies"
-        st.info("Comparison question detected — using Compare Companies mode automatically.")
+        mode_label = "Comparison question detected — using Compare Companies mode automatically."
+        st.info(mode_label)
 
     try:
         with st.spinner("Searching documents and generating answer..."):
@@ -136,14 +166,31 @@ if submit and question.strip():
         st.error(f"Something went wrong while generating the answer: {e}")
         st.stop()
 
+    # Prepend to history (newest first)
+    st.session_state.history.insert(0, {
+        "question": question,
+        "answer": answer_text,
+        "sources": sources,
+        "mode_label": mode_label,
+    })
+
     st.markdown("### Answer")
     st.markdown(answer_text)
 
     if sources:
-        st.markdown("### Sources")
+        st.markdown(f"### Sources ({len(sources)})")
         for i, src in enumerate(sources, 1):
             with st.expander(f"Source {i} — {src['company']} {src['year']} ({src['source_file']})"):
                 st.text(src["excerpt"])
 
 elif submit and not question.strip():
     st.warning("Please enter a question.")
+
+
+# ── History ───────────────────────────────────────────────────────────────────
+if len(st.session_state.history) > 1:
+    st.markdown("---")
+    st.markdown("### Previous Questions")
+    for entry in st.session_state.history[1:]:
+        with st.expander(f"Q: {entry['question']}"):
+            _render_answer_block(entry)
