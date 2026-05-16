@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 load_dotenv()
 
+import plotly.graph_objects as go
 import streamlit as st
 from retrieval.rag_pipeline import FinancialRAG
 
@@ -125,7 +126,7 @@ st.caption(
     "Every answer is grounded in the source documents."
 )
 
-tab_qa, tab_about = st.tabs(["Chat", "About"])
+tab_qa, tab_charts, tab_about = st.tabs(["Chat", "Charts", "About"])
 
 with tab_qa:
 
@@ -206,6 +207,81 @@ with tab_qa:
             "mode_label": mode_label,
         })
         st.rerun()
+
+
+with tab_charts:
+    st.markdown("### Financial Metrics Explorer")
+    st.caption("Extract and visualize key metrics from the indexed 10-K filings.")
+
+    METRICS = [
+        "Total Revenue",
+        "Net Income",
+        "R&D Expense",
+        "Operating Income",
+        "Gross Profit",
+    ]
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        chart_metric = st.selectbox("Metric", METRICS)
+        chart_type = st.radio("Chart type", ["Bar", "Line"])
+    with col2:
+        chart_companies = st.multiselect(
+            "Companies",
+            options=_companies,
+            default=_companies[:3] if len(_companies) >= 3 else _companies,
+        )
+        if _years:
+            year_range = st.slider(
+                "Year range",
+                min_value=int(_years[0]),
+                max_value=int(_years[-1]),
+                value=(int(_years[0]), int(_years[-1])),
+            )
+            selected_chart_years = [y for y in _years if year_range[0] <= y <= year_range[1]]
+        else:
+            selected_chart_years = []
+
+    if st.button("Generate Chart", type="primary"):
+        if not chart_companies:
+            st.warning("Select at least one company.")
+        elif not selected_chart_years:
+            st.warning("Select a valid year range.")
+        else:
+            cache_key = f"chart_{chart_metric}_{'_'.join(chart_companies)}_{selected_chart_years[0]}_{selected_chart_years[-1]}"
+            if cache_key not in st.session_state:
+                rag = get_rag()
+                results = {}
+                progress = st.progress(0, text="Fetching data…")
+                for idx, company in enumerate(chart_companies):
+                    results[company] = rag.extract_metric_series(
+                        company, selected_chart_years, chart_metric
+                    )
+                    progress.progress((idx + 1) / len(chart_companies), text=f"Fetched {company}…")
+                progress.empty()
+                st.session_state[cache_key] = results
+            else:
+                results = st.session_state[cache_key]
+
+            fig = go.Figure()
+            for company, series in results.items():
+                years = [y for y in selected_chart_years if series.get(y) is not None]
+                values = [series[y] / 1000 for y in years]  # convert M → B
+                if chart_type == "Bar":
+                    fig.add_trace(go.Bar(name=company, x=years, y=values))
+                else:
+                    fig.add_trace(go.Scatter(name=company, x=years, y=values, mode="lines+markers"))
+
+            fig.update_layout(
+                title=f"{chart_metric} (USD billions)",
+                xaxis_title="Fiscal Year",
+                yaxis_title="USD (billions)",
+                barmode="group",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("Values extracted by LLM from SEC 10-K filings. Verify against source documents.")
 
 
 with tab_about:

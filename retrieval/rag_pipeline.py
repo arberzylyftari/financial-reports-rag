@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections import Counter
 
 from langchain_openai import ChatOpenAI
@@ -116,6 +118,47 @@ class FinancialRAG:
             "answer": response.content,
             "sources": _format_sources(docs),
         }
+
+    def extract_metric_series(
+        self, company: str, years: list[int], metric: str
+    ) -> dict[int, float | None]:
+        """Extract a financial metric across multiple years for one company.
+
+        Makes a single LLM call per company and returns a year→value mapping
+        (values in millions USD). Returns None for years where data is absent.
+        """
+        docs = self._vector_store.similarity_search(
+            f"{metric} {company} annual total",
+            k=TOP_K_COMPARE,
+            filter={"company": company},
+        )
+        if not docs:
+            return {y: None for y in years}
+
+        context = _build_context(docs)
+        years_str = ", ".join(str(y) for y in years)
+        prompt = (
+            f"From the context below, extract '{metric}' for {company} "
+            f"for each of these fiscal years: {years_str}.\n"
+            f"Return a JSON object mapping year (as string) to the value in millions of USD "
+            f"(integers only, no symbols). Use null for missing years.\n"
+            f"Example: {{\"2022\": 394328, \"2023\": 383285, \"2024\": null}}\n"
+            f"Return ONLY the JSON object, nothing else.\n\n"
+            f"Context:\n{context}"
+        )
+        response = self._llm.invoke([HumanMessage(content=prompt)])
+        try:
+            match = re.search(r"\{.*\}", response.content, re.DOTALL)
+            if match:
+                raw = json.loads(match.group())
+                return {
+                    int(k): (float(v) if v is not None else None)
+                    for k, v in raw.items()
+                    if int(k) in years
+                }
+        except Exception:
+            pass
+        return {y: None for y in years}
 
     def compare(self, question: str, companies: list[str]) -> dict:
         """Compare multiple companies by retrieving context for each.

@@ -12,3 +12,4 @@ ragas
 python-dotenv
 tiktoken
 datasets
+plotly
