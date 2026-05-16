@@ -7,16 +7,19 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from vector_store.embedder import load_vector_store
 
-SYSTEM_PROMPT = """You are a financial analyst assistant. Answer questions strictly based on the provided context from company financial reports.
+SYSTEM_PROMPT = """You are a financial analyst assistant. Answer questions based on the provided context from company financial reports.
 
 Rules:
 - Only use information present in the provided context.
 - Always cite the company name and year for every fact you state.
-- If the context does not contain enough information, say exactly: "I don't have enough information in the provided documents to answer this question."
+- If the context contains partial information, provide what is available and clearly note what is missing rather than refusing entirely.
+- Only use this exact refusal — "I don't have enough information in the provided documents to answer this question." — when the context contains absolutely no relevant information at all.
 - Never fabricate, estimate, or hallucinate financial figures.
 - Be concise and precise."""
 
 TOP_K = 8
+TOP_K_COMPARE = 12
+ALL_COMPANIES = ["Apple", "Tesla"]
 
 
 def _format_sources(docs) -> list[dict]:
@@ -50,15 +53,30 @@ class FinancialRAG:
         self._vector_store = load_vector_store()
         self._llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    def _retrieve(self, question: str, company_filter: str | None, year_filter: int | None):
+    def _retrieve(
+        self,
+        question: str,
+        company_filter: str | list[str] | None,
+        year_filter: int | list[int] | None,
+    ):
         """Retrieve top-K chunks, optionally filtered by company and/or year."""
+        def _company_clause(f):
+            if isinstance(f, list):
+                return {"company": {"$in": f}}
+            return {"company": f}
+
+        def _year_clause(f):
+            if isinstance(f, list):
+                return {"year": {"$in": f}}
+            return {"year": f}
+
         where: dict = {}
         if company_filter and year_filter:
-            where = {"$and": [{"company": company_filter}, {"year": year_filter}]}
+            where = {"$and": [_company_clause(company_filter), _year_clause(year_filter)]}
         elif company_filter:
-            where = {"company": company_filter}
+            where = _company_clause(company_filter)
         elif year_filter:
-            where = {"year": year_filter}
+            where = _year_clause(year_filter)
 
         retriever_kwargs = {"k": TOP_K}
         if where:
@@ -92,7 +110,9 @@ class FinancialRAG:
         """
         all_docs = []
         for company in companies:
-            docs = self._retrieve(question, company_filter=company, year_filter=None)
+            docs = self._vector_store.similarity_search(
+                question, k=TOP_K_COMPARE, filter={"company": company}
+            )
             all_docs.extend(docs)
 
         context = _build_context(all_docs)

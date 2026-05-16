@@ -73,7 +73,24 @@ def _extract_year_from_filename(filename: str) -> int | None:
 
 
 def _clean_text(text: str) -> str:
-    """Normalize whitespace and remove empty lines from extracted text."""
+    """Normalize whitespace, remove empty lines, and replace non-ASCII symbols."""
+    # Replace common non-ASCII bullet/arrow characters with plain ASCII equivalents
+    replacements = {
+        "•": "-",  # bullet •
+        "‣": "-",  # triangular bullet
+        "●": "-",  # black circle ●
+        "○": "-",  # white circle ○
+        "–": "-",  # en dash
+        "—": "-",  # em dash
+        "‘": "'",  # left single quote
+        "’": "'",  # right single quote
+        "“": '"',  # left double quote
+        "”": '"',  # right double quote
+        " ": " ",  # non-breaking space
+        "�": "",  # Unicode replacement character from encoding errors
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
     lines = (line.strip() for line in text.splitlines())
     non_empty = (line for line in lines if line)
     return "\n".join(non_empty)
@@ -100,7 +117,10 @@ def parse_file(filepath: Path, company: str) -> dict | None:
     Returns a dict with keys 'text' and 'metadata', or None on failure.
     """
     try:
-        raw = filepath.read_text(encoding="utf-8", errors="replace")
+        try:
+            raw = filepath.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw = filepath.read_text(encoding="cp1252")
         soup = BeautifulSoup(raw, "lxml")
 
         for tag in soup(["script", "style", "nav", "header", "footer", "noscript"]):

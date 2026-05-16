@@ -51,7 +51,7 @@ with st.sidebar:
     st.markdown("**Example Questions**")
     examples = [
         "What was Apple's total revenue in 2024?",
-        "How did Tesla explain declining margins?",
+        "What were Tesla's main revenue sources in 2025?",
         "Compare Apple and Tesla's R&D spending",
         "What risks did Apple highlight in their latest annual report?",
     ]
@@ -70,20 +70,36 @@ question = st.text_input(
 
 submit = st.button("Submit", type="primary")
 
+def _is_comparison_query(q: str) -> bool:
+    """Return True if the question appears to compare multiple companies."""
+    q_lower = q.lower()
+    mentions_both = "apple" in q_lower and "tesla" in q_lower
+    compare_keywords = any(w in q_lower for w in ["compare", "vs", "versus", "difference", "both"])
+    return mentions_both or compare_keywords
+
+
 if submit and question.strip():
     rag = get_rag()
 
     # Resolve filters
     company_filter = None
-    if "All" not in selected_companies and len(selected_companies) == 1:
-        company_filter = selected_companies[0]
+    filtered_companies = [c for c in selected_companies if c != "All"]
+    if filtered_companies:
+        company_filter = filtered_companies[0] if len(filtered_companies) == 1 else filtered_companies
 
     year_filter = None
-    if "All" not in selected_years and len(selected_years) == 1:
-        year_filter = int(selected_years[0])
+    filtered_years = [int(y) for y in selected_years if y != "All"]
+    if filtered_years:
+        year_filter = filtered_years[0] if len(filtered_years) == 1 else filtered_years
+
+    # Auto-upgrade to Compare mode when query is clearly about multiple companies
+    effective_mode = mode
+    if mode == "Single Query" and _is_comparison_query(question):
+        effective_mode = "Compare Companies"
+        st.info("Comparison question detected — using Compare Companies mode automatically.")
 
     with st.spinner("Searching documents and generating answer..."):
-        if mode == "Compare Companies":
+        if effective_mode == "Compare Companies":
             companies = [c for c in selected_companies if c != "All"]
             if len(companies) < 2:
                 companies = ["Apple", "Tesla"]
@@ -102,7 +118,7 @@ if submit and question.strip():
         st.markdown("### Sources")
         for i, src in enumerate(sources, 1):
             with st.expander(f"Source {i} — {src['company']} {src['year']} ({src['source_file']})"):
-                st.markdown(f"```\n{src['excerpt']}\n```")
+                st.text(src["excerpt"])
 
 elif submit and not question.strip():
     st.warning("Please enter a question.")
