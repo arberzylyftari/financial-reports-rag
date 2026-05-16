@@ -36,6 +36,25 @@ def _is_comparison_query(q: str) -> bool:
 with st.sidebar:
     st.title("📊 Filters")
 
+    # Index stats
+    try:
+        _stats = get_rag().stats()
+        year_range = (
+            f"{_stats['years'][0]}–{_stats['years'][-1]}"
+            if len(_stats["years"]) > 1
+            else str(_stats["years"][0]) if _stats["years"] else "N/A"
+        )
+        company_str = ", ".join(
+            f"{c} ({n:,})" for c, n in sorted(_stats["companies"].items())
+        )
+        st.caption(
+            f"**{_stats['total_chunks']:,} chunks indexed** · {company_str} · Years: {year_range}"
+        )
+    except Exception:
+        pass
+
+    st.markdown("---")
+
     company_options = ["All", "Apple", "Tesla"]
     selected_companies = st.multiselect(
         "Company",

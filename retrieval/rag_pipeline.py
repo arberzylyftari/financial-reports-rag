@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -83,6 +85,18 @@ class FinancialRAG:
             retriever_kwargs["filter"] = where
 
         return self._vector_store.similarity_search(question, **retriever_kwargs)
+
+    def stats(self) -> dict:
+        """Return counts of indexed chunks by company and the years covered."""
+        data = self._vector_store.get(include=["metadatas"])
+        metadatas = data["metadatas"]
+        companies = dict(Counter(m.get("company", "Unknown") for m in metadatas))
+        years = sorted(set(m.get("year") for m in metadatas if m.get("year")))
+        return {
+            "total_chunks": len(metadatas),
+            "companies": companies,
+            "years": years,
+        }
 
     def query(self, question: str, company_filter: str | None = None, year_filter: int | None = None) -> dict:
         """Answer a question using retrieved context.
