@@ -46,6 +46,28 @@ def _extract_companies_from_query(q: str) -> list[str]:
     return [name for key, name in _COMPANY_MAP.items() if key in q_lower]
 
 
+def _history_to_markdown(history: list[dict]) -> str:
+    """Convert chat history to a readable Markdown document."""
+    lines = ["# Financial Reports Q&A — Conversation Export", ""]
+    for entry in history:
+        lines.append(f"## Q: {entry['question']}")
+        if entry.get("mode_label"):
+            lines.append(f"*{entry['mode_label']}*")
+        lines.append("")
+        lines.append(entry["answer"])
+        lines.append("")
+        if entry["sources"]:
+            lines.append(f"**Sources ({len(entry['sources'])}):**")
+            for src in entry["sources"]:
+                lines.append(
+                    f"- {src['company']} {src['year']} — `{src['source_file']}`"
+                )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ── Session state ─────────────────────────────────────────────────────────────
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -114,6 +136,13 @@ with st.sidebar:
 
     st.markdown("---")
     if st.session_state.history:
+        st.download_button(
+            label="Download conversation",
+            data=_history_to_markdown(st.session_state.history),
+            file_name="financial_qa_conversation.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
         if st.button("Clear history", use_container_width=True):
             st.session_state.history = []
             st.rerun()
