@@ -8,9 +8,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 load_dotenv()
 
+import json
 import plotly.graph_objects as go
 import streamlit as st
 from retrieval.rag_pipeline import FinancialRAG
+
+HISTORY_FILE = Path(__file__).parent / "chat_history.json"
+
+
+def _load_history() -> list[dict]:
+    try:
+        return json.loads(HISTORY_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _save_history(history: list[dict]) -> None:
+    try:
+        HISTORY_FILE.write_text(json.dumps(history, indent=2))
+    except Exception:
+        pass
 
 st.set_page_config(
     page_title="Financial Reports Q&A",
@@ -70,7 +87,7 @@ def _history_to_markdown(history: list[dict]) -> str:
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = _load_history()
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -145,6 +162,7 @@ with st.sidebar:
         )
         if st.button("Clear history", use_container_width=True):
             st.session_state.history = []
+            _save_history([])
             st.rerun()
 
 
@@ -243,13 +261,14 @@ with tab_qa:
                         if i < len(sources):
                             st.markdown("---")
 
-        # Save to history and rerun so the new entry renders in the loop above
+        # Save to history, persist to disk, rerun so new entry renders in the loop above
         st.session_state.history.append({
             "question": question,
             "answer": answer_text,
             "sources": sources,
             "mode_label": mode_label,
         })
+        _save_history(st.session_state.history)
         st.rerun()
 
 
