@@ -7,6 +7,8 @@ import re
 from collections import Counter
 
 from flashrank import Ranker, RerankRequest
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -58,9 +60,49 @@ class FinancialRAG:
     """Retrieval-Augmented Generation pipeline for financial reports."""
 
     def __init__(self):
-        """Initialize the vector store connection and LLM."""
+        """Initialize the vector store connection, BM25 index, and LLM."""
         self._vector_store = load_vector_store()
         self._llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self._bm25 = self._build_bm25()
+
+    def _build_bm25(self) -> BM25Retriever:
+        """Build a BM25 index from all chunks stored in ChromaDB."""
+        data = self._vector_store.get(include=["documents", "metadatas"])
+        docs = [
+            Document(page_content=text, metadata=meta)
+            for text, meta in zip(data["documents"], data["metadatas"])
+        ]
+        retriever = BM25Retriever.from_documents(docs)
+        retriever.k = TOP_K_FETCH
+        return retriever
+
+    @staticmethod
+    def _doc_matches_where(doc: Document, where: dict) -> bool:
+        """Return True if doc metadata satisfies a ChromaDB-style where clause."""
+        meta = doc.metadata
+        if "$and" in where:
+            return all(FinancialRAG._doc_matches_where(doc, clause) for clause in where["$and"])
+        for key, condition in where.items():
+            val = meta.get(key)
+            if isinstance(condition, dict):
+                if "$in" in condition and val not in condition["$in"]:
+                    return False
+            elif val != condition:
+                return False
+        return True
+
+    @staticmethod
+    def _rrf_merge(ranked_lists: list[list], k: int = 60) -> list:
+        """Merge multiple ranked doc lists with Reciprocal Rank Fusion."""
+        scores: dict[str, float] = {}
+        doc_map: dict[str, Document] = {}
+        for ranked in ranked_lists:
+            for rank, doc in enumerate(ranked, 1):
+                key = doc.page_content[:120]
+                scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
+                doc_map[key] = doc
+        merged = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+        return [doc_map[key] for key in merged]
 
     def _retrieve(
         self,
@@ -68,7 +110,7 @@ class FinancialRAG:
         company_filter: str | list[str] | None,
         year_filter: int | list[int] | None,
     ):
-        """Retrieve top-K chunks, optionally filtered by company and/or year."""
+        """Retrieve top-K chunks via hybrid BM25 + vector search with RRF, then rerank."""
         def _company_clause(f):
             if isinstance(f, list):
                 return {"company": {"$in": f}}
@@ -87,12 +129,20 @@ class FinancialRAG:
         elif year_filter:
             where = _year_clause(year_filter)
 
+        # Vector search (with metadata filter)
         retriever_kwargs = {"k": TOP_K_FETCH}
         if where:
             retriever_kwargs["filter"] = where
+        vector_docs = self._vector_store.similarity_search(question, **retriever_kwargs)
 
-        docs = self._vector_store.similarity_search(question, **retriever_kwargs)
-        return self._rerank(question, docs, TOP_K)
+        # BM25 search (filter applied post-retrieval)
+        self._bm25.k = TOP_K_FETCH
+        bm25_docs = self._bm25.invoke(question)
+        if where:
+            bm25_docs = [d for d in bm25_docs if self._doc_matches_where(d, where)]
+
+        merged = self._rrf_merge([vector_docs, bm25_docs])
+        return self._rerank(question, merged, TOP_K)
 
     def _rerank(self, query: str, docs: list, top_n: int) -> list:
         """Re-score docs with a cross-encoder and return the top_n most relevant."""
