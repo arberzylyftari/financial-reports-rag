@@ -76,18 +76,14 @@ def _clean_text(text: str) -> str:
     """Normalize whitespace, remove empty lines, and replace non-ASCII symbols."""
     # Replace common non-ASCII bullet/arrow characters with plain ASCII equivalents
     replacements = {
-        "•": "-",  # bullet •
-        "‣": "-",  # triangular bullet
-        "●": "-",  # black circle ●
-        "○": "-",  # white circle ○
-        "–": "-",  # en dash
-        "—": "-",  # em dash
-        "‘": "'",  # left single quote
-        "’": "'",  # right single quote
-        "“": '"',  # left double quote
-        "”": '"',  # right double quote
-        " ": " ",  # non-breaking space
-        "�": "",  # Unicode replacement character from encoding errors
+        "•": "-",  "‣": "-",  "●": "-",  "○": "-",
+        "◉": "-",  "◦": "-",  "⦿": "-",  "⁃": "-",
+        "·": "-",  "∙": "-",  "▪": "-",  "▸": "-",
+        "–": "-",  "—": "-",
+        "‘": "'",  "’": "'",
+        "“": '"',  "”": '"',
+        " ": " ",
+        "�": "",
     }
     for char, replacement in replacements.items():
         text = text.replace(char, replacement)

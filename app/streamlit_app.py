@@ -24,7 +24,11 @@ def get_rag() -> FinancialRAG:
     return FinancialRAG()
 
 
-_COMPANY_NAMES = {"apple", "tesla", "microsoft", "nvidia", "google", "amazon", "meta"}
+_COMPANY_MAP = {
+    "apple": "Apple", "tesla": "Tesla", "microsoft": "Microsoft",
+    "nvidia": "Nvidia", "google": "Google", "amazon": "Amazon", "meta": "Meta",
+}
+_COMPANY_NAMES = set(_COMPANY_MAP.keys())
 
 
 def _is_comparison_query(q: str) -> bool:
@@ -33,6 +37,12 @@ def _is_comparison_query(q: str) -> bool:
     companies_mentioned = sum(1 for c in _COMPANY_NAMES if c in q_lower)
     compare_keywords = any(w in q_lower for w in ["compare", "vs", "versus", "difference", "both"])
     return companies_mentioned >= 2 or compare_keywords
+
+
+def _extract_companies_from_query(q: str) -> list[str]:
+    """Return properly-cased company names mentioned in the query."""
+    q_lower = q.lower()
+    return [name for key, name in _COMPANY_MAP.items() if key in q_lower]
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -119,8 +129,8 @@ tab_qa, tab_about = st.tabs(["Chat", "About"])
 
 with tab_qa:
 
-    # Render full conversation history
-    for entry in reversed(st.session_state.history):
+    # Render full conversation history (oldest first → newest at bottom, just above input)
+    for entry in st.session_state.history:
         with st.chat_message("user"):
             st.markdown(entry["question"])
         with st.chat_message("assistant"):
@@ -150,10 +160,6 @@ with tab_qa:
         question = prefill
 
     if question:
-        # Show user bubble immediately
-        with st.chat_message("user"):
-            st.markdown(question)
-
         # Resolve filters
         company_filter = None
         filtered_companies = [c for c in selected_companies if c != "All"]
@@ -171,46 +177,35 @@ with tab_qa:
             effective_mode = "Compare Companies"
             mode_label = "Comparison question detected — switching to Compare Companies mode."
 
-        with st.chat_message("assistant"):
-            if mode_label:
-                st.caption(mode_label)
-            with st.spinner("Searching documents and generating answer..."):
-                try:
-                    rag = get_rag()
-                    if effective_mode == "Compare Companies":
-                        companies = [c for c in selected_companies if c != "All"]
-                        if len(companies) < 2:
-                            companies = ["Apple", "Tesla"]
-                        result = rag.compare(question, companies)
-                        answer_text = result["comparison"]
-                        sources = result["sources"]
-                    else:
-                        result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
-                        answer_text = result["answer"]
-                        sources = result["sources"]
-                except Exception as e:
-                    st.error(f"Something went wrong: {e}")
-                    st.stop()
+        with st.spinner("Searching documents and generating answer..."):
+            try:
+                rag = get_rag()
+                if effective_mode == "Compare Companies":
+                    # Use sidebar selection, then query text, then all companies
+                    companies = [c for c in selected_companies if c != "All"]
+                    if len(companies) < 2:
+                        companies = _extract_companies_from_query(question)
+                    if len(companies) < 2:
+                        companies = list(_COMPANY_MAP.values())
+                    result = rag.compare(question, companies)
+                    answer_text = result["comparison"]
+                    sources = result["sources"]
+                else:
+                    result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
+                    answer_text = result["answer"]
+                    sources = result["sources"]
+            except Exception as e:
+                st.error(f"Something went wrong: {e}")
+                st.stop()
 
-            st.markdown(answer_text)
-
-            if sources:
-                with st.expander(f"Sources ({len(sources)})"):
-                    for i, src in enumerate(sources, 1):
-                        st.markdown(
-                            f"**{i}. {src['company']} {src['year']}** — `{src['source_file']}`"
-                        )
-                        st.text(src["excerpt"])
-                        if i < len(sources):
-                            st.markdown("---")
-
-        # Save to history
+        # Save to history and rerun so the new entry renders in the loop above
         st.session_state.history.append({
             "question": question,
             "answer": answer_text,
             "sources": sources,
             "mode_label": mode_label,
         })
+        st.rerun()
 
 
 with tab_about:
