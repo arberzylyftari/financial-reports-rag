@@ -119,78 +119,121 @@ with st.sidebar:
 st.title("Financial Reports Q&A")
 st.caption("Ask questions about Apple and Tesla 10-K filings, grounded in the source documents.")
 
-question = st.text_input(
-    "Your question",
-    placeholder="e.g. What was Apple's total revenue in 2024?",
-    key="question_input",
-)
+tab_qa, tab_about = st.tabs(["Q&A", "About"])
 
-submit = st.button("Submit", type="primary")
+with tab_qa:
+    question = st.text_input(
+        "Your question",
+        placeholder="e.g. What was Apple's total revenue in 2024?",
+        key="question_input",
+    )
 
-if submit and question.strip():
-    rag = get_rag()
+    submit = st.button("Submit", type="primary")
 
-    # Resolve filters
-    company_filter = None
-    filtered_companies = [c for c in selected_companies if c != "All"]
-    if filtered_companies:
-        company_filter = filtered_companies[0] if len(filtered_companies) == 1 else filtered_companies
+    if submit and question.strip():
+        rag = get_rag()
 
-    year_filter = None
-    filtered_years = [int(y) for y in selected_years if y != "All"]
-    if filtered_years:
-        year_filter = filtered_years[0] if len(filtered_years) == 1 else filtered_years
+        # Resolve filters
+        company_filter = None
+        filtered_companies = [c for c in selected_companies if c != "All"]
+        if filtered_companies:
+            company_filter = filtered_companies[0] if len(filtered_companies) == 1 else filtered_companies
 
-    # Auto-upgrade to Compare mode when query is clearly about multiple companies
-    effective_mode = mode
-    mode_label = None
-    if mode == "Single Query" and _is_comparison_query(question):
-        effective_mode = "Compare Companies"
-        mode_label = "Comparison question detected — using Compare Companies mode automatically."
-        st.info(mode_label)
+        year_filter = None
+        filtered_years = [int(y) for y in selected_years if y != "All"]
+        if filtered_years:
+            year_filter = filtered_years[0] if len(filtered_years) == 1 else filtered_years
 
+        # Auto-upgrade to Compare mode when query is clearly about multiple companies
+        effective_mode = mode
+        mode_label = None
+        if mode == "Single Query" and _is_comparison_query(question):
+            effective_mode = "Compare Companies"
+            mode_label = "Comparison question detected — using Compare Companies mode automatically."
+            st.info(mode_label)
+
+        try:
+            with st.spinner("Searching documents and generating answer..."):
+                if effective_mode == "Compare Companies":
+                    companies = [c for c in selected_companies if c != "All"]
+                    if len(companies) < 2:
+                        companies = ["Apple", "Tesla"]
+                    result = rag.compare(question, companies)
+                    answer_text = result["comparison"]
+                    sources = result["sources"]
+                else:
+                    result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
+                    answer_text = result["answer"]
+                    sources = result["sources"]
+        except Exception as e:
+            st.error(f"Something went wrong while generating the answer: {e}")
+            st.stop()
+
+        # Prepend to history (newest first)
+        st.session_state.history.insert(0, {
+            "question": question,
+            "answer": answer_text,
+            "sources": sources,
+            "mode_label": mode_label,
+        })
+
+        st.markdown("### Answer")
+        st.markdown(answer_text)
+
+        if sources:
+            st.markdown(f"### Sources ({len(sources)})")
+            for i, src in enumerate(sources, 1):
+                with st.expander(f"Source {i} — {src['company']} {src['year']} ({src['source_file']})"):
+                    st.text(src["excerpt"])
+
+    elif submit and not question.strip():
+        st.warning("Please enter a question.")
+
+    # ── History ───────────────────────────────────────────────────────────────
+    if len(st.session_state.history) > 1:
+        st.markdown("---")
+        st.markdown("### Previous Questions")
+        for entry in st.session_state.history[1:]:
+            with st.expander(f"Q: {entry['question']}"):
+                _render_answer_block(entry)
+
+
+with tab_about:
+    st.markdown("## How it works")
+    st.markdown(
+        "This app uses a **Retrieval-Augmented Generation (RAG)** pipeline to answer "
+        "questions grounded strictly in Apple and Tesla 10-K filings. No figures are "
+        "fabricated — every answer cites the source document it came from."
+    )
+
+    st.markdown("### Pipeline")
+    st.markdown(
+        """
+| Step | What happens |
+|------|-------------|
+| **1. Parse** | SEC 10-K HTML filings are parsed with BeautifulSoup. Financial tables are converted to labeled rows so figures stay attached to their row labels. |
+| **2. Chunk** | Each document is split into ~800-character overlapping chunks using LangChain's `RecursiveCharacterTextSplitter`. |
+| **3. Embed** | Chunks are embedded with OpenAI `text-embedding-3-small` and stored in a local ChromaDB vector store. |
+| **4. Retrieve** | At query time, the top-K most similar chunks are retrieved. Comparison queries fetch chunks separately per company to ensure both are represented. |
+| **5. Generate** | Retrieved chunks are passed as context to `gpt-4o-mini`, which answers strictly based on what the documents say. |
+"""
+    )
+
+    st.markdown("### Documents indexed")
     try:
-        with st.spinner("Searching documents and generating answer..."):
-            if effective_mode == "Compare Companies":
-                companies = [c for c in selected_companies if c != "All"]
-                if len(companies) < 2:
-                    companies = ["Apple", "Tesla"]
-                result = rag.compare(question, companies)
-                answer_text = result["comparison"]
-                sources = result["sources"]
-            else:
-                result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
-                answer_text = result["answer"]
-                sources = result["sources"]
-    except Exception as e:
-        st.error(f"Something went wrong while generating the answer: {e}")
-        st.stop()
+        _stats = get_rag().stats()
+        cols = st.columns(len(_stats["companies"]))
+        for col, (company, count) in zip(cols, sorted(_stats["companies"].items())):
+            col.metric(label=company, value=f"{count:,}", delta="chunks")
+        st.caption(f"Years covered: {', '.join(str(y) for y in _stats['years'])}")
+    except Exception:
+        st.info("Load the Q&A tab first to see stats.")
 
-    # Prepend to history (newest first)
-    st.session_state.history.insert(0, {
-        "question": question,
-        "answer": answer_text,
-        "sources": sources,
-        "mode_label": mode_label,
-    })
-
-    st.markdown("### Answer")
-    st.markdown(answer_text)
-
-    if sources:
-        st.markdown(f"### Sources ({len(sources)})")
-        for i, src in enumerate(sources, 1):
-            with st.expander(f"Source {i} — {src['company']} {src['year']} ({src['source_file']})"):
-                st.text(src["excerpt"])
-
-elif submit and not question.strip():
-    st.warning("Please enter a question.")
-
-
-# ── History ───────────────────────────────────────────────────────────────────
-if len(st.session_state.history) > 1:
-    st.markdown("---")
-    st.markdown("### Previous Questions")
-    for entry in st.session_state.history[1:]:
-        with st.expander(f"Q: {entry['question']}"):
-            _render_answer_block(entry)
+    st.markdown("### Tech stack")
+    st.markdown(
+        "- **LangChain** — document loading, splitting, retrieval\n"
+        "- **ChromaDB** — local persistent vector store\n"
+        "- **OpenAI** — embeddings (`text-embedding-3-small`) + generation (`gpt-4o-mini`)\n"
+        "- **Streamlit** — frontend\n"
+        "- **RAGAS** — evaluation framework for faithfulness and relevancy scoring"
+    )
