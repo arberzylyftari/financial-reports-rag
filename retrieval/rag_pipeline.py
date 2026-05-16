@@ -21,7 +21,7 @@ Rules:
 
 TOP_K = 8
 TOP_K_COMPARE = 12
-ALL_COMPANIES = ["Apple", "Tesla"]
+ALL_COMPANIES = ["Amazon", "Apple", "Google", "Meta", "Microsoft", "Nvidia", "Tesla"]
 
 
 def _format_sources(docs) -> list[dict]:

@@ -24,12 +24,14 @@ def get_rag() -> FinancialRAG:
     return FinancialRAG()
 
 
+_COMPANY_NAMES = {"apple", "tesla", "microsoft", "nvidia", "google", "amazon", "meta"}
+
 def _is_comparison_query(q: str) -> bool:
     """Return True if the question appears to compare multiple companies."""
     q_lower = q.lower()
-    mentions_both = "apple" in q_lower and "tesla" in q_lower
+    companies_mentioned = sum(1 for c in _COMPANY_NAMES if c in q_lower)
     compare_keywords = any(w in q_lower for w in ["compare", "vs", "versus", "difference", "both"])
-    return mentions_both or compare_keywords
+    return companies_mentioned >= 2 or compare_keywords
 
 
 def _render_answer_block(entry: dict, expanded: bool = True) -> None:
@@ -77,14 +79,21 @@ with st.sidebar:
 
     st.markdown("---")
 
-    company_options = ["All", "Apple", "Tesla"]
+    try:
+        _companies = sorted(_stats["companies"].keys())
+        _years = _stats["years"]
+    except Exception:
+        _companies = ["Apple", "Tesla"]
+        _years = [2023, 2024, 2025]
+
+    company_options = ["All"] + _companies
     selected_companies = st.multiselect(
         "Company",
         options=company_options,
         default=["All"],
     )
 
-    year_options = ["All", 2023, 2024, 2025]
+    year_options = ["All"] + _years
     selected_years = st.multiselect(
         "Year",
         options=year_options,
@@ -100,9 +109,10 @@ with st.sidebar:
     st.markdown("**Example Questions**")
     examples = [
         "What was Apple's total revenue in 2024?",
-        "What were Tesla's main revenue sources in 2025?",
-        "Compare Apple and Tesla's R&D spending",
-        "What risks did Apple highlight in their latest annual report?",
+        "How did Nvidia's revenue grow from 2022 to 2025?",
+        "Compare Microsoft and Google's cloud revenue",
+        "What risks did Meta highlight in their 2024 annual report?",
+        "How did Amazon explain its profitability improvement?",
     ]
     for ex in examples:
         if st.button(ex, key=f"ex_{ex}", use_container_width=True):

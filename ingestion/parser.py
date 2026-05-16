@@ -152,14 +152,17 @@ def parse_file(filepath: Path, company: str) -> dict | None:
 
 
 def parse_directory(data_dir: Path) -> list[dict]:
-    """Parse all HTML files from data/raw/apple/ and data/raw/tesla/.
+    """Parse all HTML files from every subdirectory under data/raw/.
 
+    Each subdirectory name becomes the company name (e.g. data/raw/nvidia → Nvidia).
     Returns a list of document dicts: {text, metadata}.
     """
     documents = []
+    raw_dir = data_dir / "raw"
     company_dirs = {
-        "Apple": data_dir / "raw" / "apple",
-        "Tesla": data_dir / "raw" / "tesla",
+        d.name.capitalize(): d
+        for d in sorted(raw_dir.iterdir())
+        if d.is_dir()
     }
 
     for company, company_path in company_dirs.items():
