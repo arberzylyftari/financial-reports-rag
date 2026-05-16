@@ -64,7 +64,8 @@ with st.sidebar:
         "What risks did Apple highlight in their latest annual report?",
     ]
     for ex in examples:
-        st.markdown(f"- _{ex}_")
+        if st.button(ex, key=f"ex_{ex}", use_container_width=True):
+            st.session_state["question_input"] = ex
 
 
 # ── Main Area ─────────────────────────────────────────────────────────────────
@@ -74,6 +75,7 @@ st.caption("Ask questions about Apple and Tesla 10-K filings, grounded in the so
 question = st.text_input(
     "Your question",
     placeholder="e.g. What was Apple's total revenue in 2024?",
+    key="question_input",
 )
 
 submit = st.button("Submit", type="primary")
