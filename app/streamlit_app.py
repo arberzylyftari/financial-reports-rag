@@ -24,6 +24,14 @@ def get_rag() -> FinancialRAG:
     return FinancialRAG()
 
 
+def _is_comparison_query(q: str) -> bool:
+    """Return True if the question appears to compare multiple companies."""
+    q_lower = q.lower()
+    mentions_both = "apple" in q_lower and "tesla" in q_lower
+    compare_keywords = any(w in q_lower for w in ["compare", "vs", "versus", "difference", "both"])
+    return mentions_both or compare_keywords
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📊 Filters")
@@ -70,14 +78,6 @@ question = st.text_input(
 
 submit = st.button("Submit", type="primary")
 
-def _is_comparison_query(q: str) -> bool:
-    """Return True if the question appears to compare multiple companies."""
-    q_lower = q.lower()
-    mentions_both = "apple" in q_lower and "tesla" in q_lower
-    compare_keywords = any(w in q_lower for w in ["compare", "vs", "versus", "difference", "both"])
-    return mentions_both or compare_keywords
-
-
 if submit and question.strip():
     rag = get_rag()
 
@@ -98,18 +98,22 @@ if submit and question.strip():
         effective_mode = "Compare Companies"
         st.info("Comparison question detected — using Compare Companies mode automatically.")
 
-    with st.spinner("Searching documents and generating answer..."):
-        if effective_mode == "Compare Companies":
-            companies = [c for c in selected_companies if c != "All"]
-            if len(companies) < 2:
-                companies = ["Apple", "Tesla"]
-            result = rag.compare(question, companies)
-            answer_text = result["comparison"]
-            sources = result["sources"]
-        else:
-            result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
-            answer_text = result["answer"]
-            sources = result["sources"]
+    try:
+        with st.spinner("Searching documents and generating answer..."):
+            if effective_mode == "Compare Companies":
+                companies = [c for c in selected_companies if c != "All"]
+                if len(companies) < 2:
+                    companies = ["Apple", "Tesla"]
+                result = rag.compare(question, companies)
+                answer_text = result["comparison"]
+                sources = result["sources"]
+            else:
+                result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
+                answer_text = result["answer"]
+                sources = result["sources"]
+    except Exception as e:
+        st.error(f"Something went wrong while generating the answer: {e}")
+        st.stop()
 
     st.markdown("### Answer")
     st.info(answer_text)
