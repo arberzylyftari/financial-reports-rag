@@ -100,6 +100,12 @@ class FinancialRAG:
             "years": years,
         }
 
+    def _build_messages(self, context: str, prompt: str) -> list:
+        return [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=f"Context:\n{context}\n\n{prompt}"),
+        ]
+
     def query(self, question: str, company_filter: str | None = None, year_filter: int | None = None) -> dict:
         """Answer a question using retrieved context.
 
@@ -107,17 +113,22 @@ class FinancialRAG:
         """
         docs = self._retrieve(question, company_filter, year_filter)
         context = _build_context(docs)
-
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Context:\n{context}\n\nQuestion: {question}"),
-        ]
-
+        messages = self._build_messages(context, f"Question: {question}")
         response = self._llm.invoke(messages)
         return {
             "answer": response.content,
             "sources": _format_sources(docs),
         }
+
+    def query_stream(self, question: str, company_filter=None, year_filter=None):
+        """Like query() but streams the LLM response.
+
+        Returns (stream_generator, sources). Pass the generator to st.write_stream().
+        """
+        docs = self._retrieve(question, company_filter, year_filter)
+        context = _build_context(docs)
+        messages = self._build_messages(context, f"Question: {question}")
+        return self._llm.stream(messages), _format_sources(docs)
 
     def extract_metric_series(
         self, company: str, years: list[int], metric: str
@@ -160,31 +171,38 @@ class FinancialRAG:
             pass
         return {y: None for y in years}
 
-    def compare(self, question: str, companies: list[str]) -> dict:
-        """Compare multiple companies by retrieving context for each.
-
-        Returns {'comparison': str, 'sources': list[dict]}.
-        """
+    def _compare_docs_and_prompt(self, question: str, companies: list[str]):
         all_docs = []
         for company in companies:
             docs = self._vector_store.similarity_search(
                 question, k=TOP_K_COMPARE, filter={"company": company}
             )
             all_docs.extend(docs)
-
         context = _build_context(all_docs)
-        comparison_prompt = (
+        prompt = (
             f"Compare the following companies on this topic: {', '.join(companies)}\n\n"
             f"Question: {question}"
         )
+        return all_docs, context, prompt
 
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Context:\n{context}\n\n{comparison_prompt}"),
-        ]
+    def compare(self, question: str, companies: list[str]) -> dict:
+        """Compare multiple companies by retrieving context for each.
 
+        Returns {'comparison': str, 'sources': list[dict]}.
+        """
+        all_docs, context, prompt = self._compare_docs_and_prompt(question, companies)
+        messages = self._build_messages(context, prompt)
         response = self._llm.invoke(messages)
         return {
             "comparison": response.content,
             "sources": _format_sources(all_docs),
         }
+
+    def compare_stream(self, question: str, companies: list[str]):
+        """Like compare() but streams the LLM response.
+
+        Returns (stream_generator, sources). Pass the generator to st.write_stream().
+        """
+        all_docs, context, prompt = self._compare_docs_and_prompt(question, companies)
+        messages = self._build_messages(context, prompt)
+        return self._llm.stream(messages), _format_sources(all_docs)

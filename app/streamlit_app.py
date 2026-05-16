@@ -178,26 +178,41 @@ with tab_qa:
             effective_mode = "Compare Companies"
             mode_label = "Comparison question detected — switching to Compare Companies mode."
 
-        with st.spinner("Searching documents and generating answer..."):
-            try:
-                rag = get_rag()
+        try:
+            rag = get_rag()
+            with st.spinner("Retrieving documents…"):
                 if effective_mode == "Compare Companies":
-                    # Use sidebar selection, then query text, then all companies
                     companies = [c for c in selected_companies if c != "All"]
                     if len(companies) < 2:
                         companies = _extract_companies_from_query(question)
                     if len(companies) < 2:
                         companies = list(_COMPANY_MAP.values())
-                    result = rag.compare(question, companies)
-                    answer_text = result["comparison"]
-                    sources = result["sources"]
+                    stream, sources = rag.compare_stream(question, companies)
                 else:
-                    result = rag.query(question, company_filter=company_filter, year_filter=year_filter)
-                    answer_text = result["answer"]
-                    sources = result["sources"]
-            except Exception as e:
-                st.error(f"Something went wrong: {e}")
-                st.stop()
+                    stream, sources = rag.query_stream(
+                        question,
+                        company_filter=company_filter,
+                        year_filter=year_filter,
+                    )
+        except Exception as e:
+            st.error(f"Something went wrong: {e}")
+            st.stop()
+
+        with st.chat_message("assistant"):
+            if mode_label:
+                st.caption(mode_label)
+            answer_text = st.write_stream(
+                chunk.content for chunk in stream if hasattr(chunk, "content")
+            )
+            if sources:
+                with st.expander(f"Sources ({len(sources)})"):
+                    for i, src in enumerate(sources, 1):
+                        st.markdown(
+                            f"**{i}. {src['company']} {src['year']}** — `{src['source_file']}`"
+                        )
+                        st.text(src["excerpt"])
+                        if i < len(sources):
+                            st.markdown("---")
 
         # Save to history and rerun so the new entry renders in the loop above
         st.session_state.history.append({
