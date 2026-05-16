@@ -13,3 +13,4 @@ python-dotenv
 tiktoken
 datasets
 plotly
+flashrank

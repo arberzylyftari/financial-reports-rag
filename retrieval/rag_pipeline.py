@@ -6,10 +6,14 @@ import json
 import re
 from collections import Counter
 
+from flashrank import Ranker, RerankRequest
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from vector_store.embedder import load_vector_store
+
+# Loaded once, shared across all FinancialRAG instances
+_reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/tmp/flashrank")
 
 SYSTEM_PROMPT = """You are a financial analyst assistant. Answer questions based on the provided context from company financial reports.
 
@@ -21,8 +25,9 @@ Rules:
 - Never fabricate, estimate, or hallucinate financial figures.
 - Be concise and precise."""
 
-TOP_K = 8
-TOP_K_COMPARE = 12
+TOP_K = 8           # final chunks sent to LLM after reranking
+TOP_K_FETCH = 24    # candidates fetched before reranking
+TOP_K_COMPARE = 12  # per-company chunks in compare mode
 ALL_COMPANIES = ["Amazon", "Apple", "Google", "Meta", "Microsoft", "Nvidia", "Tesla"]
 
 
@@ -82,11 +87,22 @@ class FinancialRAG:
         elif year_filter:
             where = _year_clause(year_filter)
 
-        retriever_kwargs = {"k": TOP_K}
+        retriever_kwargs = {"k": TOP_K_FETCH}
         if where:
             retriever_kwargs["filter"] = where
 
-        return self._vector_store.similarity_search(question, **retriever_kwargs)
+        docs = self._vector_store.similarity_search(question, **retriever_kwargs)
+        return self._rerank(question, docs, TOP_K)
+
+    def _rerank(self, query: str, docs: list, top_n: int) -> list:
+        """Re-score docs with a cross-encoder and return the top_n most relevant."""
+        if not docs:
+            return docs
+        passages = [{"id": i, "text": doc.page_content} for i, doc in enumerate(docs)]
+        request = RerankRequest(query=query, passages=passages)
+        results = _reranker.rerank(request)
+        top_ids = [r["id"] for r in results[:top_n]]
+        return [docs[i] for i in top_ids]
 
     def stats(self) -> dict:
         """Return counts of indexed chunks by company and the years covered."""
