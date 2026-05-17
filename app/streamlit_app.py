@@ -214,7 +214,7 @@ with st.sidebar:
 # ── Main Area ─────────────────────────────────────────────────────────────────
 st.title("Financial Reports Q&A")
 st.caption(
-    "Chat with 7 companies' SEC 10-K filings (2018–2025). "
+    "Chat with 7 companies' SEC 10-K filings (2018–2026). "
     "Every answer is grounded in the source documents."
 )
 

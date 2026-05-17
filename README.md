@@ -22,13 +22,15 @@ It achieves this through a multi-stage pipeline: parse → chunk → embed → H
 
 | Company   | Filings Covered | Ticker |
 |-----------|----------------|--------|
-| Apple     | 2018 – 2024    | AAPL   |
-| Amazon    | 2018 – 2024    | AMZN   |
-| Google    | 2018 – 2024    | GOOGL  |
-| Meta      | 2018 – 2024    | META   |
-| Microsoft | 2018 – 2024    | MSFT   |
-| Nvidia    | 2018 – 2024    | NVDA   |
-| Tesla     | 2018 – 2024    | TSLA   |
+| Apple     | 2018 – 2025    | AAPL   |
+| Amazon    | 2018 – 2025    | AMZN   |
+| Google    | 2018 – 2025    | GOOGL  |
+| Meta      | 2018 – 2025    | META   |
+| Microsoft | 2018 – 2025    | MSFT   |
+| Nvidia    | 2018 – 2026    | NVDA   |
+| Tesla     | 2018 – 2025    | TSLA   |
+
+> Nvidia's fiscal year ends in late January, so their FY2026 filing (ended January 25, 2026) is the most recent available.
 
 All filings are SEC Form 10-K (annual reports), sourced directly from [SEC EDGAR](https://www.sec.gov/cgi-bin/browse-edgar).
 
