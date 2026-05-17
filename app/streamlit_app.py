@@ -178,7 +178,7 @@ tab_qa, tab_charts, tab_about = st.tabs(["Chat", "Charts", "About"])
 with tab_qa:
 
     # Render full conversation history (oldest first → newest at bottom, just above input)
-    for entry in st.session_state.history:
+    for h_idx, entry in enumerate(st.session_state.history):
         with st.chat_message("user"):
             st.markdown(entry["question"])
         with st.chat_message("assistant"):
@@ -194,6 +194,11 @@ with tab_qa:
                         st.text(src["excerpt"])
                         if i < len(entry["sources"]):
                             st.markdown("---")
+            if entry.get("followups"):
+                st.caption("You might also ask:")
+                for f_idx, fq in enumerate(entry["followups"]):
+                    if st.button(fq, key=f"fq_{h_idx}_{f_idx}", use_container_width=True):
+                        st.session_state["prefill"] = fq
 
     # Prefill from sidebar example buttons
     prefill = st.session_state.pop("prefill", "")
@@ -267,6 +272,8 @@ with tab_qa:
                         st.text(src["excerpt"])
                         if i < len(sources):
                             st.markdown("---")
+            with st.spinner("Generating follow-up suggestions…"):
+                followups = rag.suggest_followups(question, answer_text)
 
         # Save to history, persist to disk, rerun so new entry renders in the loop above
         st.session_state.history.append({
@@ -274,6 +281,7 @@ with tab_qa:
             "answer": answer_text,
             "sources": sources,
             "mode_label": mode_label,
+            "followups": followups,
         })
         _save_history(st.session_state.history)
         st.rerun()

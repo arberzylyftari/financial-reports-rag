@@ -207,6 +207,18 @@ class FinancialRAG:
             "years": years,
         }
 
+    def suggest_followups(self, question: str, answer: str) -> list[str]:
+        """Return 3 relevant follow-up questions based on the Q&A exchange."""
+        prompt = (
+            "Based on this financial Q&A exchange, suggest exactly 3 short follow-up "
+            "questions a financial analyst might ask next. "
+            "Return only the questions, one per line, no numbering or bullet points.\n\n"
+            f"Q: {question}\nA: {answer}"
+        )
+        response = self._llm.invoke([HumanMessage(content=prompt)])
+        lines = [l.strip() for l in response.content.strip().splitlines() if l.strip()]
+        return lines[:3]
+
     def _standalone_question(self, question: str, history: list[dict]) -> str:
         """Rewrite a follow-up question as a self-contained question using chat history."""
         if not history:
