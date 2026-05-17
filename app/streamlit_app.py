@@ -61,6 +61,16 @@ _COMPANY_MAP = {
     "apple": "Apple", "tesla": "Tesla", "microsoft": "Microsoft",
     "nvidia": "Nvidia", "google": "Google", "amazon": "Amazon", "meta": "Meta",
 }
+
+COMPANY_COLORS = {
+    "Apple":     "#007AFF",
+    "Microsoft": "#00BCF2",
+    "Nvidia":    "#76B900",
+    "Google":    "#EA4335",
+    "Amazon":    "#FF9900",
+    "Meta":      "#0866FF",
+    "Tesla":     "#CC0000",
+}
 _COMPANY_NAMES = set(_COMPANY_MAP.keys())
 
 
@@ -387,30 +397,51 @@ with tab_charts:
                     progress.progress((idx + 1) / len(chart_companies), text=f"Fetched {company}…")
                 progress.empty()
                 st.session_state[cache_key] = results
-            else:
-                results = st.session_state[cache_key]
+            # Store render params so chart survives download button reruns
+            st.session_state["chart_render"] = {
+                "key": cache_key,
+                "metric": chart_metric,
+                "type": chart_type,
+                "years": selected_chart_years,
+            }
 
-            is_pct = chart_metric in PERCENTAGE_METRICS
+    # Render chart from session state — persists across download button reruns
+    if "chart_render" in st.session_state:
+        render = st.session_state["chart_render"]
+        results = st.session_state.get(render["key"], {})
+        r_metric = render["metric"]
+        r_type   = render["type"]
+        r_years  = render["years"]
+
+        if results:
+            is_pct  = r_metric in PERCENTAGE_METRICS
             y_label = "%" if is_pct else "USD (billions)"
-            title   = f"{chart_metric} ({'%' if is_pct else 'USD billions'})"
+            title   = f"{r_metric} ({'%' if is_pct else 'USD billions'})"
 
             fig = go.Figure()
             for company, series in results.items():
-                years  = [y for y in selected_chart_years if series.get(y) is not None]
+                years  = [y for y in r_years if series.get(y) is not None]
                 values = [series[y] if is_pct else series[y] / 1000 for y in years]
-                if chart_type == "Bar":
-                    fig.add_trace(go.Bar(name=company, x=years, y=values))
-                elif chart_type == "Area":
+                color  = COMPANY_COLORS.get(company, "#888888")
+                if r_type == "Bar":
+                    fig.add_trace(go.Bar(name=company, x=years, y=values, marker_color=color))
+                elif r_type == "Area":
                     fig.add_trace(go.Scatter(name=company, x=years, y=values,
-                                             mode="lines", fill="tozeroy", opacity=0.7))
+                                             mode="lines", fill="tozeroy",
+                                             line=dict(color=color), opacity=0.7))
                 else:
-                    fig.add_trace(go.Scatter(name=company, x=years, y=values, mode="lines+markers"))
+                    fig.add_trace(go.Scatter(name=company, x=years, y=values,
+                                             mode="lines+markers", line=dict(color=color),
+                                             marker=dict(color=color)))
 
             fig.update_layout(
                 title=title,
                 xaxis_title="Fiscal Year",
                 yaxis_title=y_label,
                 barmode="group",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#FAFAFA"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 hovermode="x unified",
             )
@@ -419,36 +450,33 @@ with tab_charts:
                 fig,
                 use_container_width=True,
                 config={
-                    "toImageButtonOptions": {"format": "png", "filename": chart_metric.replace(" ", "_"), "scale": 2},
+                    "toImageButtonOptions": {"format": "png", "filename": r_metric.replace(" ", "_"), "scale": 2},
                     "displaylogo": False,
                 },
+            )
+
+            # Light-themed copy for HTML export (readable on white background)
+            fig_export = go.Figure(fig)
+            fig_export.update_layout(
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                font=dict(color="#222222"),
+                xaxis=dict(gridcolor="#EEEEEE", linecolor="#CCCCCC"),
+                yaxis=dict(gridcolor="#EEEEEE", linecolor="#CCCCCC"),
             )
 
             dl_col1, dl_col2 = st.columns([1, 5])
             with dl_col1:
                 st.download_button(
                     "Download chart (HTML)",
-                    data=fig.to_html(),
-                    file_name=f"{chart_metric.replace(' ', '_')}.html",
+                    data=fig_export.to_html(include_plotlyjs="cdn"),
+                    file_name=f"{r_metric.replace(' ', '_')}.html",
                     mime="text/html",
+                    key="dl_html",
                 )
             st.caption("Values extracted by LLM from SEC 10-K filings. Verify against source documents.")
 
-            # YoY growth overlay
-            growth_data = {}
-            for company, series in results.items():
-                years_with_data = sorted(y for y in selected_chart_years if series.get(y) is not None)
-                if len(years_with_data) >= 2:
-                    growth_data[company] = {
-                        years_with_data[i]: round(
-                            (series[years_with_data[i]] - series[years_with_data[i - 1]])
-                            / abs(series[years_with_data[i - 1]]) * 100, 1
-                        )
-                        for i in range(1, len(years_with_data))
-                        if series[years_with_data[i - 1]] not in (None, 0)
-                    }
-
-            # Raw data table + CSV export
+            # Raw data table
             st.markdown("#### Data Table")
             table_rows = {}
             for company, series in results.items():
@@ -458,24 +486,48 @@ with tab_charts:
                         else f"${series[y]/1000:.2f}B" if series.get(y) is not None
                         else "—"
                     )
-                    for y in selected_chart_years
+                    for y in r_years
                 }
             st.dataframe(table_rows, use_container_width=True)
 
-            # Build CSV for download
+            # CSV — clean layout with metadata header and labeled columns
+            unit_label = "%" if is_pct else "M USD"
+            col_headers = [f"{y} ({unit_label})" for y in r_years]
+
             csv_buf = io.StringIO()
             writer = csv.writer(csv_buf)
-            writer.writerow(["Company"] + [str(y) for y in selected_chart_years])
+            writer.writerow(["=== Financial Reports RAG ==="])
+            writer.writerow([f"Metric: {r_metric}"])
+            writer.writerow([f"Unit: {'Percentage (%)' if is_pct else 'Millions USD — chart displays values as Billions USD'}"])
+            writer.writerow(["Source: SEC 10-K annual filings. Values extracted by LLM — verify against source documents before use."])
+            writer.writerow([])
+            writer.writerow(["Company"] + col_headers)
             for company, series in results.items():
-                writer.writerow(
-                    [company] + [series.get(y, "") for y in selected_chart_years]
-                )
+                def _fmt(v):
+                    if v is None:
+                        return "N/A"
+                    return f"{v:.2f}%" if is_pct else f"{v:,.0f}"
+                writer.writerow([company] + [_fmt(series.get(y)) for y in r_years])
             st.download_button(
                 "Download data (CSV)",
                 data=csv_buf.getvalue(),
-                file_name=f"{chart_metric.replace(' ', '_')}_data.csv",
+                file_name=f"{r_metric.replace(' ', '_')}_data.csv",
                 mime="text/csv",
+                key="dl_csv",
             )
+
+            # YoY growth overlay
+            growth_data = {}
+            for company, series in results.items():
+                yrs = sorted(y for y in r_years if series.get(y) is not None)
+                if len(yrs) >= 2:
+                    growth_data[company] = {
+                        yrs[i]: round(
+                            (series[yrs[i]] - series[yrs[i - 1]]) / abs(series[yrs[i - 1]]) * 100, 1
+                        )
+                        for i in range(1, len(yrs))
+                        if series[yrs[i - 1]] not in (None, 0)
+                    }
 
             if growth_data:
                 st.markdown("#### Year-over-Year Growth (%)")
@@ -483,15 +535,21 @@ with tab_charts:
                 for company, g_series in growth_data.items():
                     g_years  = sorted(g_series.keys())
                     g_values = [g_series[y] for y in g_years]
+                    color    = COMPANY_COLORS.get(company, "#888888")
                     fig_growth.add_trace(go.Scatter(
                         name=company, x=g_years, y=g_values,
                         mode="lines+markers",
+                        line=dict(color=color),
+                        marker=dict(color=color),
                         hovertemplate="%{y:.1f}%<extra>" + company + "</extra>",
                     ))
                 fig_growth.update_layout(
                     xaxis_title="Fiscal Year",
                     yaxis_title="YoY Growth (%)",
                     yaxis=dict(ticksuffix="%"),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#FAFAFA"),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="x unified",
                 )
