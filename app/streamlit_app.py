@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 load_dotenv()
 
+import csv
+import io
 import json
 import plotly.graph_objects as go
 import streamlit as st
@@ -160,6 +162,17 @@ with st.sidebar:
         options=["Single Query", "Compare Companies"],
     )
 
+    TOPIC_FILTERS = {
+        "Any topic": "",
+        "Revenue & Profit": "Focus on revenue, net income, and profitability.",
+        "Cash Flow": "Focus on cash flow from operations, free cash flow, and liquidity.",
+        "R&D & Innovation": "Focus on research and development spending and innovation strategy.",
+        "Risk Factors": "Focus on risks, uncertainties, and challenges disclosed in the filing.",
+        "Guidance & Outlook": "Focus on forward-looking statements, guidance, and strategic outlook.",
+        "Segments & Geography": "Focus on business segments, product lines, and geographic revenue breakdown.",
+    }
+    selected_topic = st.selectbox("Topic focus", options=list(TOPIC_FILTERS.keys()))
+
     st.markdown("---")
     st.markdown("**Example Questions**")
     examples = [
@@ -195,7 +208,7 @@ st.caption(
     "Every answer is grounded in the source documents."
 )
 
-tab_qa, tab_charts, tab_about = st.tabs(["Chat", "Charts", "About"])
+tab_qa, tab_charts, tab_dashboard, tab_about = st.tabs(["Chat", "Charts", "Dashboard", "About"])
 
 with tab_qa:
 
@@ -246,6 +259,10 @@ with tab_qa:
         if filtered_years:
             year_filter = filtered_years[0] if len(filtered_years) == 1 else filtered_years
 
+        # Apply topic prefix to steer the LLM focus
+        topic_prefix = TOPIC_FILTERS.get(selected_topic, "")
+        augmented_question = f"{topic_prefix} {question}".strip() if topic_prefix else question
+
         effective_mode = mode
         mode_label = None
         if mode == "Single Query" and _is_comparison_query(question):
@@ -267,10 +284,10 @@ with tab_qa:
                         companies = _extract_companies_from_query(question)
                     if len(companies) < 2:
                         companies = list(_COMPANY_MAP.values())
-                    stream, sources = rag.compare_stream(question, companies, chat_history=chat_history)
+                    stream, sources = rag.compare_stream(augmented_question, companies, chat_history=chat_history)
                 else:
                     stream, sources = rag.query_stream(
-                        question,
+                        augmented_question,
                         company_filter=company_filter,
                         year_filter=year_filter,
                         chat_history=chat_history,
@@ -320,15 +337,21 @@ with tab_charts:
     METRICS = [
         "Total Revenue",
         "Net Income",
-        "R&D Expense",
-        "Operating Income",
         "Gross Profit",
+        "Operating Income",
+        "R&D Expense",
+        "Free Cash Flow",
+        "Total Assets",
+        "Cash and Equivalents",
+        "Gross Margin %",
+        "Operating Margin %",
     ]
+    PERCENTAGE_METRICS = {"Gross Margin %", "Operating Margin %"}
 
     col1, col2 = st.columns([1, 2])
     with col1:
         chart_metric = st.selectbox("Metric", METRICS)
-        chart_type = st.radio("Chart type", ["Bar", "Line"])
+        chart_type = st.radio("Chart type", ["Bar", "Line", "Area"])
     with col2:
         chart_companies = st.multiselect(
             "Companies",
@@ -367,25 +390,195 @@ with tab_charts:
             else:
                 results = st.session_state[cache_key]
 
+            is_pct = chart_metric in PERCENTAGE_METRICS
+            y_label = "%" if is_pct else "USD (billions)"
+            title   = f"{chart_metric} ({'%' if is_pct else 'USD billions'})"
+
             fig = go.Figure()
             for company, series in results.items():
-                years = [y for y in selected_chart_years if series.get(y) is not None]
-                values = [series[y] / 1000 for y in years]  # convert M → B
+                years  = [y for y in selected_chart_years if series.get(y) is not None]
+                values = [series[y] if is_pct else series[y] / 1000 for y in years]
                 if chart_type == "Bar":
                     fig.add_trace(go.Bar(name=company, x=years, y=values))
+                elif chart_type == "Area":
+                    fig.add_trace(go.Scatter(name=company, x=years, y=values,
+                                             mode="lines", fill="tozeroy", opacity=0.7))
                 else:
                     fig.add_trace(go.Scatter(name=company, x=years, y=values, mode="lines+markers"))
 
             fig.update_layout(
-                title=f"{chart_metric} (USD billions)",
+                title=title,
                 xaxis_title="Fiscal Year",
-                yaxis_title="USD (billions)",
+                yaxis_title=y_label,
                 barmode="group",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 hovermode="x unified",
             )
-            st.plotly_chart(fig, use_container_width=True)
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                config={
+                    "toImageButtonOptions": {"format": "png", "filename": chart_metric.replace(" ", "_"), "scale": 2},
+                    "displaylogo": False,
+                },
+            )
+
+            dl_col1, dl_col2 = st.columns([1, 5])
+            with dl_col1:
+                st.download_button(
+                    "Download chart (HTML)",
+                    data=fig.to_html(),
+                    file_name=f"{chart_metric.replace(' ', '_')}.html",
+                    mime="text/html",
+                )
             st.caption("Values extracted by LLM from SEC 10-K filings. Verify against source documents.")
+
+            # YoY growth overlay
+            growth_data = {}
+            for company, series in results.items():
+                years_with_data = sorted(y for y in selected_chart_years if series.get(y) is not None)
+                if len(years_with_data) >= 2:
+                    growth_data[company] = {
+                        years_with_data[i]: round(
+                            (series[years_with_data[i]] - series[years_with_data[i - 1]])
+                            / abs(series[years_with_data[i - 1]]) * 100, 1
+                        )
+                        for i in range(1, len(years_with_data))
+                        if series[years_with_data[i - 1]] not in (None, 0)
+                    }
+
+            # Raw data table + CSV export
+            st.markdown("#### Data Table")
+            table_rows = {}
+            for company, series in results.items():
+                table_rows[company] = {
+                    str(y): (
+                        f"{series[y]:.1f}%" if is_pct and series.get(y) is not None
+                        else f"${series[y]/1000:.2f}B" if series.get(y) is not None
+                        else "—"
+                    )
+                    for y in selected_chart_years
+                }
+            st.dataframe(table_rows, use_container_width=True)
+
+            # Build CSV for download
+            csv_buf = io.StringIO()
+            writer = csv.writer(csv_buf)
+            writer.writerow(["Company"] + [str(y) for y in selected_chart_years])
+            for company, series in results.items():
+                writer.writerow(
+                    [company] + [series.get(y, "") for y in selected_chart_years]
+                )
+            st.download_button(
+                "Download data (CSV)",
+                data=csv_buf.getvalue(),
+                file_name=f"{chart_metric.replace(' ', '_')}_data.csv",
+                mime="text/csv",
+            )
+
+            if growth_data:
+                st.markdown("#### Year-over-Year Growth (%)")
+                fig_growth = go.Figure()
+                for company, g_series in growth_data.items():
+                    g_years  = sorted(g_series.keys())
+                    g_values = [g_series[y] for y in g_years]
+                    fig_growth.add_trace(go.Scatter(
+                        name=company, x=g_years, y=g_values,
+                        mode="lines+markers",
+                        hovertemplate="%{y:.1f}%<extra>" + company + "</extra>",
+                    ))
+                fig_growth.update_layout(
+                    xaxis_title="Fiscal Year",
+                    yaxis_title="YoY Growth (%)",
+                    yaxis=dict(ticksuffix="%"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hovermode="x unified",
+                )
+                fig_growth.add_hline(y=0, line_dash="dot", line_color="gray")
+                st.plotly_chart(
+                    fig_growth,
+                    use_container_width=True,
+                    config={"displaylogo": False},
+                )
+
+
+with tab_dashboard:
+    st.markdown("### Company Dashboard")
+    st.caption("Snapshot of key financial metrics for selected companies in a given year.")
+
+    DASHBOARD_METRICS = ["Total Revenue", "Net Income", "Gross Profit", "R&D Expense", "Operating Income"]
+
+    d_col1, d_col2 = st.columns([1, 3])
+    with d_col1:
+        dash_year = st.selectbox("Year", options=list(reversed(_years)) if _years else [2024], key="dash_year")
+    with d_col2:
+        dash_companies = st.multiselect(
+            "Companies",
+            options=_companies,
+            default=_companies,
+            key="dash_companies",
+        )
+
+    if st.button("Load Dashboard", type="primary"):
+        if not dash_companies:
+            st.warning("Select at least one company.")
+        else:
+            dash_key = f"dashboard_{dash_year}_{'_'.join(dash_companies)}"
+            if dash_key not in st.session_state:
+                rag = get_rag()
+                dash_results = {}
+                prog = st.progress(0, text="Loading…")
+                for idx, company in enumerate(dash_companies):
+                    dash_results[company] = {}
+                    for metric in DASHBOARD_METRICS:
+                        series = rag.extract_metric_series(company, [dash_year], metric)
+                        dash_results[company][metric] = series.get(dash_year)
+                    prog.progress((idx + 1) / len(dash_companies), text=f"Loaded {company}…")
+                prog.empty()
+                st.session_state[dash_key] = dash_results
+            else:
+                dash_results = st.session_state[dash_key]
+
+            # Metric cards — one row per metric, one column per company
+            for metric in DASHBOARD_METRICS:
+                st.markdown(f"**{metric}**")
+                cols = st.columns(len(dash_companies))
+                for col, company in zip(cols, dash_companies):
+                    val = dash_results[company].get(metric)
+                    display = f"${val/1000:.2f}B" if val is not None else "N/A"
+                    col.metric(label=company, value=display)
+                st.markdown("---")
+
+            # Radar chart — compare all companies across all metrics for selected year
+            st.markdown("#### Multi-Metric Comparison (Radar)")
+            radar_fig = go.Figure()
+            for company in dash_companies:
+                raw_vals = [dash_results[company].get(m) for m in DASHBOARD_METRICS]
+                # Normalise each metric to 0–1 across all companies so the radar is comparable
+                norm_vals = []
+                for m_idx, metric in enumerate(DASHBOARD_METRICS):
+                    all_vals = [dash_results[c].get(metric) for c in dash_companies if dash_results[c].get(metric) is not None]
+                    if not all_vals or raw_vals[m_idx] is None:
+                        norm_vals.append(0)
+                    else:
+                        mn, mx = min(all_vals), max(all_vals)
+                        norm_vals.append((raw_vals[m_idx] - mn) / (mx - mn) if mx != mn else 1.0)
+
+                radar_fig.add_trace(go.Scatterpolar(
+                    r=norm_vals + [norm_vals[0]],
+                    theta=DASHBOARD_METRICS + [DASHBOARD_METRICS[0]],
+                    fill="toself",
+                    name=company,
+                    opacity=0.6,
+                ))
+
+            radar_fig.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+            )
+            st.plotly_chart(radar_fig, use_container_width=True, config={"displaylogo": False})
+            st.caption(f"Values normalised within each metric across selected companies. Fiscal year {dash_year}.")
 
 
 with tab_about:
