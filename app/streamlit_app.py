@@ -15,6 +15,19 @@ from retrieval.rag_pipeline import FinancialRAG
 
 HISTORY_FILE = Path(__file__).parent / "chat_history.json"
 
+# GPT-4o-mini pricing (USD per token)
+_INPUT_COST_PER_TOKEN  = 0.150 / 1_000_000
+_OUTPUT_COST_PER_TOKEN = 0.600 / 1_000_000
+
+
+def _stream_and_capture_usage(stream, usage_out: dict):
+    """Yield text chunks from an LLM stream, capturing token usage into usage_out."""
+    for chunk in stream:
+        if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+            usage_out.update(chunk.usage_metadata)
+        if hasattr(chunk, "content") and chunk.content:
+            yield chunk.content
+
 
 def _load_history() -> list[dict]:
     try:
@@ -109,6 +122,15 @@ with st.sidebar:
         )
     except Exception:
         _stats = None
+
+    # Session cost tracker
+    session_input  = sum(e.get("input_tokens",  0) for e in st.session_state.history)
+    session_output = sum(e.get("output_tokens", 0) for e in st.session_state.history)
+    session_cost   = session_input * _INPUT_COST_PER_TOKEN + session_output * _OUTPUT_COST_PER_TOKEN
+    if st.session_state.history:
+        col_a, col_b = st.columns(2)
+        col_a.metric("Session tokens", f"{session_input + session_output:,}")
+        col_b.metric("Est. cost", f"${session_cost:.4f}")
 
     st.markdown("---")
 
@@ -257,12 +279,11 @@ with tab_qa:
             st.error(f"Something went wrong: {e}")
             st.stop()
 
+        usage_out: dict = {}
         with st.chat_message("assistant"):
             if mode_label:
                 st.caption(mode_label)
-            answer_text = st.write_stream(
-                chunk.content for chunk in stream if hasattr(chunk, "content")
-            )
+            answer_text = st.write_stream(_stream_and_capture_usage(stream, usage_out))
             if sources:
                 with st.expander(f"Sources ({len(sources)})"):
                     for i, src in enumerate(sources, 1):
@@ -275,6 +296,9 @@ with tab_qa:
             with st.spinner("Generating follow-up suggestions…"):
                 followups = rag.suggest_followups(question, answer_text)
 
+        input_tokens  = usage_out.get("input_tokens",  0)
+        output_tokens = usage_out.get("output_tokens", 0)
+
         # Save to history, persist to disk, rerun so new entry renders in the loop above
         st.session_state.history.append({
             "question": question,
@@ -282,6 +306,8 @@ with tab_qa:
             "sources": sources,
             "mode_label": mode_label,
             "followups": followups,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
         })
         _save_history(st.session_state.history)
         st.rerun()

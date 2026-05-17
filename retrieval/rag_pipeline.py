@@ -62,7 +62,7 @@ class FinancialRAG:
     def __init__(self):
         """Initialize the vector store connection, BM25 index, and LLM."""
         self._vector_store = load_vector_store()
-        self._llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self._llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, stream_usage=True)
         self._bm25 = self._build_bm25()
 
     def _build_bm25(self) -> BM25Retriever:
