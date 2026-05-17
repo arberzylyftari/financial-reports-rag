@@ -10,7 +10,7 @@ from flashrank import Ranker, RerankRequest
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from vector_store.embedder import load_vector_store
 
@@ -66,12 +66,23 @@ class FinancialRAG:
         self._bm25 = self._build_bm25()
 
     def _build_bm25(self) -> BM25Retriever:
-        """Build a BM25 index from all chunks stored in ChromaDB."""
-        data = self._vector_store.get(include=["documents", "metadatas"])
-        docs = [
-            Document(page_content=text, metadata=meta)
-            for text, meta in zip(data["documents"], data["metadatas"])
-        ]
+        """Build a BM25 index from all chunks stored in ChromaDB, fetched in batches."""
+        BATCH = 500
+        docs = []
+        offset = 0
+        while True:
+            data = self._vector_store.get(
+                include=["documents", "metadatas"], limit=BATCH, offset=offset
+            )
+            if not data["documents"]:
+                break
+            docs.extend(
+                Document(page_content=text, metadata=meta)
+                for text, meta in zip(data["documents"], data["metadatas"])
+            )
+            if len(data["documents"]) < BATCH:
+                break
+            offset += BATCH
         retriever = BM25Retriever.from_documents(docs)
         retriever.k = TOP_K_FETCH
         return retriever
@@ -156,8 +167,17 @@ class FinancialRAG:
 
     def stats(self) -> dict:
         """Return counts of indexed chunks by company and the years covered."""
-        data = self._vector_store.get(include=["metadatas"])
-        metadatas = data["metadatas"]
+        BATCH = 500
+        metadatas = []
+        offset = 0
+        while True:
+            data = self._vector_store.get(include=["metadatas"], limit=BATCH, offset=offset)
+            if not data["metadatas"]:
+                break
+            metadatas.extend(data["metadatas"])
+            if len(data["metadatas"]) < BATCH:
+                break
+            offset += BATCH
         companies = dict(Counter(m.get("company", "Unknown") for m in metadatas))
         years = sorted(set(m.get("year") for m in metadatas if m.get("year")))
         return {
@@ -166,34 +186,57 @@ class FinancialRAG:
             "years": years,
         }
 
-    def _build_messages(self, context: str, prompt: str) -> list:
-        return [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Context:\n{context}\n\n{prompt}"),
-        ]
+    def _standalone_question(self, question: str, history: list[dict]) -> str:
+        """Rewrite a follow-up question as a self-contained question using chat history."""
+        if not history:
+            return question
+        history_str = "\n".join(
+            f"{m['role'].capitalize()}: {m['content']}" for m in history[-4:]
+        )
+        prompt = (
+            f"Given this conversation:\n{history_str}\n\n"
+            f"Rewrite the following follow-up question as a fully standalone question "
+            f"that can be understood with no prior context. "
+            f"If it is already standalone, return it unchanged. "
+            f"Return only the rewritten question, nothing else.\n"
+            f"Follow-up: {question}"
+        )
+        return self._llm.invoke([HumanMessage(content=prompt)]).content.strip()
 
-    def query(self, question: str, company_filter: str | None = None, year_filter: int | None = None) -> dict:
+    def _build_messages(self, context: str, prompt: str, history: list[dict] | None = None) -> list:
+        messages: list = [SystemMessage(content=SYSTEM_PROMPT)]
+        for msg in (history or []):
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            else:
+                messages.append(AIMessage(content=msg["content"]))
+        messages.append(HumanMessage(content=f"Context:\n{context}\n\n{prompt}"))
+        return messages
+
+    def query(self, question: str, company_filter: str | None = None, year_filter: int | None = None, chat_history: list[dict] | None = None) -> dict:
         """Answer a question using retrieved context.
 
         Returns {'answer': str, 'sources': list[dict]}.
         """
-        docs = self._retrieve(question, company_filter, year_filter)
+        retrieval_question = self._standalone_question(question, chat_history or [])
+        docs = self._retrieve(retrieval_question, company_filter, year_filter)
         context = _build_context(docs)
-        messages = self._build_messages(context, f"Question: {question}")
+        messages = self._build_messages(context, f"Question: {question}", chat_history)
         response = self._llm.invoke(messages)
         return {
             "answer": response.content,
             "sources": _format_sources(docs),
         }
 
-    def query_stream(self, question: str, company_filter=None, year_filter=None):
+    def query_stream(self, question: str, company_filter=None, year_filter=None, chat_history: list[dict] | None = None):
         """Like query() but streams the LLM response.
 
         Returns (stream_generator, sources). Pass the generator to st.write_stream().
         """
-        docs = self._retrieve(question, company_filter, year_filter)
+        retrieval_question = self._standalone_question(question, chat_history or [])
+        docs = self._retrieve(retrieval_question, company_filter, year_filter)
         context = _build_context(docs)
-        messages = self._build_messages(context, f"Question: {question}")
+        messages = self._build_messages(context, f"Question: {question}", chat_history)
         return self._llm.stream(messages), _format_sources(docs)
 
     def extract_metric_series(
@@ -251,24 +294,24 @@ class FinancialRAG:
         )
         return all_docs, context, prompt
 
-    def compare(self, question: str, companies: list[str]) -> dict:
+    def compare(self, question: str, companies: list[str], chat_history: list[dict] | None = None) -> dict:
         """Compare multiple companies by retrieving context for each.
 
         Returns {'comparison': str, 'sources': list[dict]}.
         """
         all_docs, context, prompt = self._compare_docs_and_prompt(question, companies)
-        messages = self._build_messages(context, prompt)
+        messages = self._build_messages(context, prompt, chat_history)
         response = self._llm.invoke(messages)
         return {
             "comparison": response.content,
             "sources": _format_sources(all_docs),
         }
 
-    def compare_stream(self, question: str, companies: list[str]):
+    def compare_stream(self, question: str, companies: list[str], chat_history: list[dict] | None = None):
         """Like compare() but streams the LLM response.
 
         Returns (stream_generator, sources). Pass the generator to st.write_stream().
         """
         all_docs, context, prompt = self._compare_docs_and_prompt(question, companies)
-        messages = self._build_messages(context, prompt)
+        messages = self._build_messages(context, prompt, chat_history)
         return self._llm.stream(messages), _format_sources(all_docs)

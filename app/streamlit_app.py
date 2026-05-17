@@ -225,6 +225,12 @@ with tab_qa:
             effective_mode = "Compare Companies"
             mode_label = "Comparison question detected — switching to Compare Companies mode."
 
+        # Build chat history for multi-turn context (last 3 turns)
+        chat_history = []
+        for entry in st.session_state.history[-3:]:
+            chat_history.append({"role": "user", "content": entry["question"]})
+            chat_history.append({"role": "assistant", "content": entry["answer"]})
+
         try:
             rag = get_rag()
             with st.spinner("Retrieving documents…"):
@@ -234,12 +240,13 @@ with tab_qa:
                         companies = _extract_companies_from_query(question)
                     if len(companies) < 2:
                         companies = list(_COMPANY_MAP.values())
-                    stream, sources = rag.compare_stream(question, companies)
+                    stream, sources = rag.compare_stream(question, companies, chat_history=chat_history)
                 else:
                     stream, sources = rag.query_stream(
                         question,
                         company_filter=company_filter,
                         year_filter=year_filter,
+                        chat_history=chat_history,
                     )
         except Exception as e:
             st.error(f"Something went wrong: {e}")
