@@ -115,13 +115,32 @@ class FinancialRAG:
         merged = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
         return [doc_map[key] for key in merged]
 
+    def _hypothetical_doc(self, question: str) -> str:
+        """Generate a short hypothetical answer to boost vector search precision (HyDE).
+
+        The generated text is never shown to the user — it is only embedded and used
+        as the vector search query so that retrieval operates in answer-space rather
+        than question-space.
+        """
+        prompt = (
+            "Write a short, plausible passage (2-3 sentences) from a company financial "
+            "report that would directly answer the following question. "
+            "Approximate figures are fine — accuracy is not required.\n"
+            f"Question: {question}"
+        )
+        return self._llm.invoke([HumanMessage(content=prompt)]).content.strip()
+
     def _retrieve(
         self,
         question: str,
         company_filter: str | list[str] | None,
         year_filter: int | list[int] | None,
     ):
-        """Retrieve top-K chunks via hybrid BM25 + vector search with RRF, then rerank."""
+        """Retrieve top-K chunks via hybrid BM25 + vector search with RRF, then rerank.
+
+        Vector search uses a HyDE-generated hypothetical answer as the query embedding;
+        BM25 uses the original question for exact keyword matching.
+        """
         def _company_clause(f):
             if isinstance(f, list):
                 return {"company": {"$in": f}}
@@ -140,13 +159,15 @@ class FinancialRAG:
         elif year_filter:
             where = _year_clause(year_filter)
 
-        # Vector search (with metadata filter)
         retriever_kwargs = {"k": TOP_K_FETCH}
         if where:
             retriever_kwargs["filter"] = where
-        vector_docs = self._vector_store.similarity_search(question, **retriever_kwargs)
 
-        # BM25 search (filter applied post-retrieval)
+        # HyDE: embed a hypothetical answer for vector search
+        hyde_query = self._hypothetical_doc(question)
+        vector_docs = self._vector_store.similarity_search(hyde_query, **retriever_kwargs)
+
+        # BM25 uses original question — keyword matching benefits from exact terms
         self._bm25.k = TOP_K_FETCH
         bm25_docs = self._bm25.invoke(question)
         if where:
