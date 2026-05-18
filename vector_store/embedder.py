@@ -1,5 +1,6 @@
 """Embed document chunks and persist them in ChromaDB."""
 
+import os
 import time
 from collections import Counter
 from pathlib import Path
@@ -11,13 +12,37 @@ from langchain_core.documents import Document
 
 COLLECTION_NAME = "financial_reports"
 CHROMA_DIR = str(Path(__file__).resolve().parents[1] / "chroma_db")
-BATCH_SIZE = 50   # chunks per API call — keeps each batch well under 40k TPM
-BATCH_PAUSE = 2   # seconds between batches
+BATCH_SIZE = 100  # chunks per API call — balanced for typical TPM limits
+BATCH_PAUSE = 1   # seconds between batches — keeps under per-minute limits
 
 
 def get_embeddings() -> OpenAIEmbeddings:
-    """Return the OpenAI embedding model."""
-    return OpenAIEmbeddings(model="text-embedding-3-small")
+    """Return the OpenAI embedding model.
+
+    An explicit request_timeout ensures a stalled API call fails fast and
+    is retried rather than hanging the whole ingest indefinitely.
+    """
+    return OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        request_timeout=60,
+        max_retries=6,
+    )
+
+
+def _get_chroma_client():
+    """Return a Chroma client.
+
+    Uses Chroma Cloud when CHROMA_API_KEY is set (production / deployed),
+    otherwise a local persistent client (local development).
+    """
+    api_key = os.getenv("CHROMA_API_KEY")
+    if api_key:
+        return chromadb.CloudClient(
+            api_key=api_key,
+            tenant=os.environ["CHROMA_TENANT"],
+            database=os.environ["CHROMA_DATABASE"],
+        )
+    return chromadb.PersistentClient(path=CHROMA_DIR)
 
 
 def embed_and_store(chunks: list[Document]) -> Chroma:
@@ -28,7 +53,7 @@ def embed_and_store(chunks: list[Document]) -> Chroma:
     """
     embeddings = get_embeddings()
 
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    client = _get_chroma_client()
     existing = [c.name for c in client.list_collections()]
     if COLLECTION_NAME in existing:
         client.delete_collection(COLLECTION_NAME)
@@ -54,7 +79,7 @@ def embed_and_store(chunks: list[Document]) -> Chroma:
                 documents=batch,
                 embedding=embeddings,
                 collection_name=COLLECTION_NAME,
-                persist_directory=CHROMA_DIR,
+                client=client,
             )
         else:
             vector_store.add_documents(batch)
@@ -72,5 +97,5 @@ def load_vector_store() -> Chroma:
     return Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=embeddings,
-        persist_directory=CHROMA_DIR,
+        client=_get_chroma_client(),
     )

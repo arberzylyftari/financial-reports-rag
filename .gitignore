@@ -13,3 +13,4 @@ build/
 venv/
 app/chat_history.json
 PRESENTATION.md
+.streamlit/secrets.toml
