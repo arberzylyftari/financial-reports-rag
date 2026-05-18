@@ -5,51 +5,89 @@ from pathlib import Path
 from bs4 import BeautifulSoup, Tag
 
 
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+_NUM_RE = re.compile(r"^\(?-?\$?[\d,]+(?:\.\d+)?\)?%?$")
+
+
+def _merge_paren_negatives(cells: list[str]) -> list[str]:
+    """Merge a negative number split as '(' '1,234' ')' back into '(1,234)'."""
+    out: list[str] = []
+    i = 0
+    while i < len(cells):
+        if cells[i] == "(" and i + 2 < len(cells) and cells[i + 2] == ")":
+            out.append(f"({cells[i + 1]})")
+            i += 3
+        else:
+            out.append(cells[i])
+            i += 1
+    return out
+
+
+def _is_number(s: str) -> bool:
+    """True if the cell is a financial value (handles $, commas, %, parens)."""
+    return bool(_NUM_RE.match(s.replace(" ", "")))
+
+
 def _table_to_text(table: Tag) -> str:
     """Convert an HTML table into readable labeled sentences.
 
-    Each data row is rendered as:
-        "Label: col_header_1 value1, col_header_2 value2"
+    Financial-statement rows become:
+        "Research and development: 2024 31,370, 2023 29,915, 2022 26,251"
 
-    This preserves the relationship between row labels (e.g. "R&D Expense")
-    and their values across columns (e.g. years), which plain get_text() destroys.
+    preserving the link between a row label and each fiscal year's value,
+    which plain get_text() destroys. SEC tables split "$", values and "%"
+    into separate <td> cells and rarely use <th> for year headers, so the
+    year-header row is detected by content and noise cells are dropped before
+    pairing. Tables with no detectable year row (non-financial) fall back to
+    a simple readable join.
     """
     rows = table.find_all("tr")
     if not rows:
         return ""
 
-    # Extract column headers from the first row whose cells are <th> tags.
-    headers: list[str] = []
+    grid: list[list[str]] = []
     for row in rows:
-        ths = row.find_all("th")
-        if ths:
-            headers = [th.get_text(" ", strip=True) for th in ths]
+        cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
+        cells = _merge_paren_negatives(cells)
+        cleaned = [c for c in cells if c not in ("", "$", "%")]
+        if cleaned:
+            grid.append(cleaned)
+
+    # Locate the year-header row: first row with >=2 cells containing a year.
+    header_years: list[str] = []
+    header_idx = -1
+    for idx, cells in enumerate(grid):
+        year_cells = [m.group() for c in cells if (m := _YEAR_RE.search(c))]
+        if len(year_cells) >= 2:
+            header_years = year_cells
+            header_idx = idx
             break
 
-    lines: list[str] = []
-    for row in rows:
-        cells = row.find_all(["td", "th"])
-        if not cells:
-            continue
-        texts = [c.get_text(" ", strip=True) for c in cells]
-        # Skip rows that are all empty or duplicate the header row.
-        if not any(texts) or texts == headers:
-            continue
+    if header_idx == -1:
+        # No year header — non-financial table; keep a readable flat join.
+        return "\n".join(" | ".join(cells) for cells in grid)
 
-        if headers and len(texts) > 1:
-            label = texts[0]
-            # Pair each value cell with its column header when available.
-            pairs: list[str] = []
-            for i, val in enumerate(texts[1:], 1):
-                if not val:
-                    continue
-                col_header = headers[i] if i < len(headers) else ""
-                pairs.append(f"{col_header} {val}".strip() if col_header else val)
-            if pairs:
-                lines.append(f"{label}: {', '.join(pairs)}")
+    lines: list[str] = []
+    for idx, cells in enumerate(grid):
+        if idx == header_idx:
+            continue
+        first_num = next(
+            (i for i, c in enumerate(cells) if _is_number(c)), len(cells)
+        )
+        label = " ".join(cells[:first_num]).strip(" :")
+        values = [c for c in cells[first_num:] if _is_number(c)]
+
+        if not label and not values:
+            continue
+        if not values:
+            lines.append(label)
+        elif len(values) <= len(header_years):
+            pairs = [f"{header_years[i]} {v}" for i, v in enumerate(values)]
+            lines.append(f"{label}: {', '.join(pairs)}" if label else ", ".join(pairs))
         else:
-            # No headers — just join non-empty cells with a pipe separator.
-            lines.append(" | ".join(t for t in texts if t))
+            # More values than year columns (extra %-of-sales subcolumns):
+            # don't assert year mappings — list values plainly.
+            lines.append(f"{label}: {', '.join(values)}" if label else ", ".join(values))
 
     return "\n".join(lines)
 
