@@ -66,6 +66,7 @@ def _atomic_facts(text: str, metadata: dict) -> list[Document]:
     """
     company = metadata.get("company", "Unknown")
     source_file = metadata.get("source_file", "")
+    filing_year = metadata.get("year")
     facts: list[Document] = []
     seen: set[tuple[str, int]] = set()
 
@@ -82,6 +83,14 @@ def _atomic_facts(text: str, metadata: dict) -> list[Document]:
             if not value or not year_str.isdigit():
                 continue
             year = int(year_str)
+            # Financial statements show the current FY + 2 prior years.
+            # Anything outside that window comes from 5-year "Selected
+            # Financial Data" summaries or forward maturity schedules and
+            # pollutes the indexed year range — skip it.
+            if filing_year is not None and not (
+                filing_year - 2 <= year <= filing_year
+            ):
+                continue
             if (label, year) in seen:
                 continue
             seen.add((label, year))
