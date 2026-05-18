@@ -30,6 +30,7 @@ Rules:
 TOP_K = 8           # final chunks sent to LLM after reranking
 TOP_K_FETCH = 24    # candidates fetched before reranking
 TOP_K_COMPARE = 12  # per-company chunks in compare mode
+CHROMA_PAGE_SIZE = 300  # Chroma Cloud free tier caps a single get() at 300 rows
 ALL_COMPANIES = ["Amazon", "Apple", "Google", "Meta", "Microsoft", "Nvidia", "Tesla"]
 
 
@@ -67,7 +68,7 @@ class FinancialRAG:
 
     def _build_bm25(self) -> BM25Retriever:
         """Build a BM25 index from all chunks stored in ChromaDB, fetched in batches."""
-        BATCH = 500
+        BATCH = CHROMA_PAGE_SIZE
         docs = []
         offset = 0
         while True:
@@ -83,6 +84,7 @@ class FinancialRAG:
             if len(data["documents"]) < BATCH:
                 break
             offset += BATCH
+        self._bm25_docs = docs
         retriever = BM25Retriever.from_documents(docs)
         retriever.k = TOP_K_FETCH
         return retriever
@@ -163,17 +165,30 @@ class FinancialRAG:
         if where:
             retriever_kwargs["filter"] = where
 
-        # HyDE: embed a hypothetical answer for vector search
+        # Vector leg 1 — HyDE: embed a hypothetical answer (helps vague,
+        # semantic questions). Vector leg 2 — the raw question: HyDE prose
+        # embeds far from terse table/fact rows, so the literal question
+        # recovers exact-figure lookups the hypothetical misses.
         hyde_query = self._hypothetical_doc(question)
-        vector_docs = self._vector_store.similarity_search(hyde_query, **retriever_kwargs)
+        hyde_docs = self._vector_store.similarity_search(hyde_query, **retriever_kwargs)
+        question_docs = self._vector_store.similarity_search(question, **retriever_kwargs)
 
-        # BM25 uses original question — keyword matching benefits from exact terms
-        self._bm25.k = TOP_K_FETCH
-        bm25_docs = self._bm25.invoke(question)
+        # BM25 must filter the corpus BEFORE ranking. Ranking globally then
+        # post-filtering returns 0 results for company-specific queries
+        # (the global lexical top-k is dominated by other companies).
         if where:
-            bm25_docs = [d for d in bm25_docs if self._doc_matches_where(d, where)]
+            subset = [d for d in self._bm25_docs if self._doc_matches_where(d, where)]
+            if subset:
+                bm25 = BM25Retriever.from_documents(subset)
+                bm25.k = TOP_K_FETCH
+                bm25_docs = bm25.invoke(question)
+            else:
+                bm25_docs = []
+        else:
+            self._bm25.k = TOP_K_FETCH
+            bm25_docs = self._bm25.invoke(question)
 
-        merged = self._rrf_merge([vector_docs, bm25_docs])
+        merged = self._rrf_merge([hyde_docs, question_docs, bm25_docs])
         return self._rerank(question, merged, TOP_K)
 
     def _rerank(self, query: str, docs: list, top_n: int) -> list:
@@ -188,7 +203,7 @@ class FinancialRAG:
 
     def stats(self) -> dict:
         """Return counts of indexed chunks by company and the years covered."""
-        BATCH = 500
+        BATCH = CHROMA_PAGE_SIZE
         metadatas = []
         offset = 0
         while True:
