@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import os
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -13,6 +15,17 @@ import io
 import json
 import plotly.graph_objects as go
 import streamlit as st
+
+# On Streamlit Cloud there is no .env; secrets come from st.secrets.
+# Bridge them into the environment so the OpenAI/Chroma clients (which
+# read os.environ) work the same in local dev and deployed.
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
+
 from retrieval.rag_pipeline import FinancialRAG
 
 HISTORY_FILE = Path(__file__).parent / "chat_history.json"
