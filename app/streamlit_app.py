@@ -117,7 +117,7 @@ if "history" not in st.session_state:
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("📊 Filters")
+    st.title("Filters")
 
     try:
         _stats = get_rag().stats()

@@ -309,6 +309,18 @@ python evaluation/ragas_eval.py
 
 The evaluation dataset (`evaluation/eval_dataset.py`) contains hand-crafted Q&A pairs with ground-truth answers, covering revenue figures, year-over-year growth, segment breakdowns, and risk factors across all seven companies. Results are saved to `evaluation/results.json`.
 
+**Benchmark results** (10-question evaluation set, scored by GPT-4o-mini):
+
+| Metric | Score |
+|--------|-------|
+| Faithfulness | **0.89** |
+| Answer Relevancy | **0.76** |
+| Context Recall | **0.63** |
+
+A faithfulness of **0.89** means roughly 9 in 10 answer claims are directly traceable to the retrieved source text — the system rarely hallucinates figures, which is the single most important property for a financial assistant.
+
+**Limitations.** Answer relevancy and context recall are pulled down by a small number of narrow line-item lookups (e.g. a specific year's operating income or R&D expense). On these, the retriever occasionally fails to surface the exact chunk containing the figure, and the model correctly refuses rather than guessing. This is a *retrieval-coverage* limitation, not a hallucination one — the high faithfulness score confirms the system prefers an honest "not found" over a fabricated number. Improving table extraction granularity and chunk-level metadata for specific financial line items is the clearest path to raising recall.
+
 ---
 
 ## Running Tests

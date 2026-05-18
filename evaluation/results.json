@@ -1,0 +1,67 @@
+{
+  "faithfulness": 0.8928571428571429,
+  "answer_relevancy": 0.7611367743428584,
+  "context_recall": 0.6333333333333333,
+  "per_question": [
+    {
+      "user_input": "What was Apple's total net revenue in fiscal year 2024?",
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9999995698387089,
+      "context_recall": 1.0
+    },
+    {
+      "user_input": "What were Apple's primary product categories by revenue in 2024?",
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9999996005062521,
+      "context_recall": 1.0
+    },
+    {
+      "user_input": "How much did Apple spend on research and development in 2024?",
+      "faithfulness": 0.6666666666666666,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.0
+    },
+    {
+      "user_input": "What risks did Apple highlight related to its supply chain?",
+      "faithfulness": 0.7142857142857143,
+      "answer_relevancy": 0.8916414181726445,
+      "context_recall": 0.6666666666666666
+    },
+    {
+      "user_input": "What was Tesla's total revenue in 2024?",
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9999996139947073,
+      "context_recall": 1.0
+    },
+    {
+      "user_input": "How did Tesla explain its declining gross margins?",
+      "faithfulness": 0.7142857142857143,
+      "answer_relevancy": 0.858619147265248,
+      "context_recall": 0.6666666666666666
+    },
+    {
+      "user_input": "What was Tesla's research and development expenditure in 2024?",
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.0,
+      "context_recall": 0.0
+    },
+    {
+      "user_input": "What were the main risks Tesla cited regarding competition?",
+      "faithfulness": 0.8333333333333334,
+      "answer_relevancy": 0.9188325515007216,
+      "context_recall": 1.0
+    },
+    {
+      "user_input": "What was Apple's operating income in fiscal year 2024?",
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.0,
+      "context_recall": 0.0
+    },
+    {
+      "user_input": "How many vehicles did Tesla deliver in 2024?",
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9422758421503016,
+      "context_recall": 1.0
+    }
+  ]
+}
